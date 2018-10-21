@@ -1,8 +1,11 @@
 {
   "name": "secret-dictator",
   "version": "1.0.0",
+  "engines": {
+    "node":"8.9.3"
+  },
   "description": "Secure Web App Dev Final",
-  "main": "server.js",
+  "main": "serverno.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "serve": "vue-cli-service serve",
