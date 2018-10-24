@@ -1,10 +1,14 @@
 const jwt = require('jsonwebtoken')
 const moment = require('moment')
+var striptags = require('striptags') // https://www.npmjs.com/package/striptags
+// WebSocket Security by Heroku : https://devcenter.heroku.com/articles/websocket-security
 
-module.exports.startListening = function (http) {
-    const io = require("socket.io")(http)
-    http.listen(4001)
+
+module.exports.startListening = function (io) {
+    // const io = require("socket.io")(http)
+    //io.listen(http)
     var connectedUsers = []
+    console.log(io)
     //Authentication Middleware
     io.use((socket, next) => {
         if (socket.handshake.query && socket.handshake.query.token){
@@ -14,7 +18,7 @@ module.exports.startListening = function (http) {
                 socket.username = decoded.user.username
                 console.log(socket.username)
                 next()
-            });
+            })
         } else {
             next(new Error('Authentication error'))
         }    
@@ -45,9 +49,8 @@ module.exports.startListening = function (http) {
             }
         })
         socket.on('SEND_MESSAGE', (message) => {
-          message.timestamp = moment().format('MM/D/YY hh:mm a')
           if (validateMessage(message)) {
-            io.emit('message',message)
+            io.emit('message',sanitizedMessage(message))
           }
         })
     })
@@ -60,6 +63,14 @@ module.exports.startListening = function (http) {
         }
         return true
     }
+    // strip tags to prevent XSS attacks
+    var sanitizedMessage = (message) => {
+        message.username = striptags(message.username)
+        message.messageText = striptags(message.messageText)
+        if (message.messageText === '') message.messageText = '-Message Removed-'
+        message.timestamp = moment().format('MM/D/YY hh:mm a')
+        return message
+    } 
 
     // How to get all clients in a room
     // io.of('/').in('Room0').clients( function (err, clients) {

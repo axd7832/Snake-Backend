@@ -4,7 +4,9 @@ const cors = require('cors')
 const bodyParser = require("body-parser")
 const cookieParser = require('cookie-parser')
 const app = require("express")()
-const http = require("http").Server(app)
+const server = require("http").createServer(app)
+const io = require("socket.io")(server)
+
 const socketConn = require('./connections/socketConn')
 const port = process.env.PORT || 4000
 const routes = require('./routes')
@@ -38,11 +40,12 @@ app.use(bodyParser.urlencoded({extended: false}))
 app.use(helmet())
 app.use(mongoSanitize())
 app.use(routes)
+
+//rename this
+socketConn.startListening(io)
+
 app.on('ready', () => {
-  app.listen(port, () => {
+  server.listen(port, () => {
     console.log(`The Magic Is Happening On Port ${port}`)
   })
 })
-
-//SOCKET.IO HTTP Connection
-socketConn.startListening(http)
