@@ -38,6 +38,7 @@ routes.post('/api/register', (req, res) => {
       userAccount.save( (err) => {
         if(err) {
           res.status(400).json({message: "Username taken."})
+          console.log(err)
         } else{
           res.status(200).json({message: 'Account Created'})
         }

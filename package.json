@@ -5,11 +5,12 @@
     "node": "8.11.3"
   },
   "description": "Secure Web App Dev Final",
-  "main": "serverno.js",
+  "main": "server.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "serve": "vue-cli-service serve",
     "build": "vue-cli-service build"
+
   },
   "author": "axd7832@rit.edu",
   "license": "ISC",
