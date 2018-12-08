@@ -4,7 +4,7 @@ var striptags = require('striptags') // https://www.npmjs.com/package/striptags
 // WebSocket Security by Heroku : https://devcenter.heroku.com/articles/websocket-security
 
 const Game = require('../models/Game')
-
+const MessageDoc = require('../models/Message')
 
 const LOBBY_ROOM = 'Room 0'
 var connectedUsers = []
@@ -64,6 +64,7 @@ module.exports.startListening = function (io) {
             var newGame = new Game({
                 gameId: roomId,
                 hostUsername: socket.username,
+                gameBounds: {width: 50, height: 50},
                 gameStatus: 'Created'
             })
             newGame.save( (err) => {
@@ -72,7 +73,7 @@ module.exports.startListening = function (io) {
                 } else{
                   console.log('Game Created')
                 }
-              })     
+            })     
         })
 
         // event for a user inviting another player
@@ -93,20 +94,30 @@ module.exports.startListening = function (io) {
         socket.on('inviteResponse', (response) => {
             if (response) {
                 if(response.answer && response.inviteeUsername && response.answer === true) {
+                    var roomId = generateRoomId()
                     var inviteeSocket = findOneUserSocketByUsername(response.inviteeUsername)
                     var inviteeCurrentRoom = inviteeSocket.currentRoom
-                    joinRoom(socket,inviteeCurrentRoom)
-                    // add the invitee to the current game save in the db
-                    let query = {hostUsername: inviteeSocket.username, gameStatus: 'Created', gameId: inviteeCurrentRoom}
-                    let updatedDoc = {
+                    joinRoom(socket,roomId)
+                    joinRoom(inviteeSocket,roomId)
+
+                    var newGame = new Game({
+                        gameId: roomId,
+                        hostUsername: inviteeSocket.username,
                         playerTwoUsername: socket.username,
-                        gameStatus: 'Awaiting Ready Up'
-                    } 
-                    Game.findOneAndUpdate(query, updatedDoc, {new: true}, (err, model) => {
-                        if (err) {
-                            console.log('Could Not Update')
-                        }
+                        gameBounds: {width: 50, height: 50},
+                        gameStatus: 'Awaiting Ready Up',
+                        score: 0,
+                        foodLocation: getFoodLocation(),
+                        snakeArray: initSnake()
                     })
+                    newGame.save( (err) => {
+                        if(err) {
+                          console.log(err)
+                        } else{
+                          console.log('Game Created')
+                          sendGameData(newGame.gameId,newGame)
+                        }
+                    })  
                 }
             }
         })
@@ -120,6 +131,12 @@ module.exports.startListening = function (io) {
           if (validateMessage(message)) {
             var currentRoom = getSocketCurrentRoom(socket)
             // save the sanitized message to the DB here...
+            var Message = new MessageDoc ({
+                sentBy: message.username,
+                messageText: message.messageText,
+                roomId: getSocketCurrentRoom(socket)
+            })
+            Message.save()
             io.to(currentRoom).emit('message',sanitizedMessage(message))
           }
         })
@@ -174,16 +191,13 @@ module.exports.startListening = function (io) {
                     if (model.hostReady === true && model.playerTwoReady === true) {
                         var gameStartObj = {
                             gameStatus: 'Active',
-                            score: 0,
-                            foodLocation: getFoodLocation(),
-                            snakeArray: initSnake(),
-                            lastMoveTIme: moment().toISOString()
+                            lastMoveTime: moment().toISOString()
                         }
                         Game.findOneAndUpdate({gameId: roomId}, gameStartObj, {new: true}, (err, game) => {
                             if (err || game === null) {
                                 console.log('Could Not Update Game Status to Active')
                             }
-                            sendGameData(roomId, game.snakeArray, game.foodLocation)
+                            sendGameData(roomId, game)
                         })
                     }
                 })
@@ -194,32 +208,47 @@ module.exports.startListening = function (io) {
             var query = {
                 gameId: gameUpdate.roomId,
             }
+            //console.log(`IN GAME COMMAND ${socket.username}`)
             Game.findOneAndUpdate(query,{new: true}, (err, game) => {
                 if (err || game === null) {
-                    // console.log(`Could not retrieve game: ${query.gameId}`)
+                    console.log(`Could not retrieve game: ${query.gameId}`)
                 } else {
-                    console.log(game)
+                    //console.log(game)
                     if (game.gameStatus === 'Active') {
-                            // check the time of the last move - 
+                        // check the time of the last move - 
                         var lastMove = moment(game.lastMoveTime)
                         // console.log(lastMove)
                         var diff = moment().diff(lastMove)
-                        if ( diff > 300){
+                        // this is the 'tick' of the game...
+                        if ( diff > 100){
                             // perform all the game operations here
-                            console.log('\nMOVING SNAKE\n')
+                            game.snakeArray = moveSnake(game.snakeArray, gameUpdate.userInputDirection, game.lastMoveDirection)
+                            console.log("\nAFTER MOVEMENT\n")
                             console.log(game.snakeArray)
-                            var updatedSnakeArr = moveSnake(game.snakeArray, gameUpdate.userInputDirection)
-                            Game.findOneAndUpdate(query,{snakeArray: updatedSnakeArr, lastMoveTime: moment().toISOString()},{new:true},(err, updatedGame) => {
-                                if (err || updatedGame === null) {
-                                    console.log(`Could not retrieve game: ${query.gameId}`)
+                            if (game.snakeArray[0] !== -1) {
+                                console.log("\nVALID MOVE\n")
+                                game.lastMoveTime = moment().toISOString()
+                                game.lastMoveDirection = gameUpdate.userInputDirection
+                                // console.log("SETTING THE NEW SNAKE ARRAY")
+                                // console.log(game.snakeArray)
+                                var wasFoodEaten = checkIfFoodEaten(game.snakeArray, game.foodLocation)
+                                if (wasFoodEaten === true) {
+                                    console.log("FOOD EATEN")
+                                    game.snakeArray = extendSnake(game.snakeArray,gameUpdate.userInputDirection)
+                                    game.foodLocation = getFoodLocation()
+                                    game.score += 100
                                 }
-                                // UPDATING CLIENTS
-                                console.log('UPDATING CLIENTS')
-                                console.log(updatedGame)
-                                sendGameData(updatedGame.gameId, updatedGame.snakeArray, updatedGame.foodLocation)
-                            })
-                        } else {
-                            console.log('\nNEXT MOVE TOO SOON\n')
+                                // check if game over
+                                var isGameOver = checkGameOver (game)
+                                console.log(`\nCHECK GAME OVER ${isGameOver}\n`)      
+                                if (isGameOver === true) game.gameStatus = "Completed"                   
+                                Game.findOneAndUpdate({gameId: game.gameId},game,{new:true},(err, updatedGame) => {
+                                    if (err || updatedGame === null) {
+                                        console.log(`Could not retrieve game: ${query.gameId}`)
+                                    }
+                                    sendGameData(updatedGame.gameId, updatedGame)
+                                })
+                            }
                         }
                     }
                 }
@@ -287,7 +316,7 @@ module.exports.startListening = function (io) {
     // TODO remove the current active socket from the returned array
     var getActivePlayerUsernames = () => {
         var onlineUsers = connectedUsers.map(user => user.username)
-        console.log(onlineUsers)
+        // console.log(onlineUsers)
         return onlineUsers
     }
     
@@ -297,8 +326,13 @@ module.exports.startListening = function (io) {
         //console.log('cleanning requests...')
     }
 
-    var sendGameData = (gameId, snakeArr, foodLoc) => {
-        io.to(gameId).emit('GAME_UPDATE',{snakeArr,foodLoc})
+    var sendGameData = (gameId, game) => {
+        io.to(gameId).emit('GAME_UPDATE',{
+            snakeArr: game.snakeArray,
+            foodLoc: game.foodLocation,
+            gameStatus: game.gameStatus, 
+            score: game.score
+        })
     }
     var getFoodLocation = () => {
         return getRandomLocation()
@@ -306,13 +340,13 @@ module.exports.startListening = function (io) {
     var initSnake = () => {
         var randomLoc = getRandomLocation()
         var snakeArr = []
-        snakeArr.push(createSnakeHead(randomLoc.x,randomLoc.y))
+        snakeArr.push(createSnakeElem(randomLoc.x,randomLoc.y,true))
         return snakeArr
     }
-    var createSnakeHead = (x, y) => {
+    var createSnakeElem = (x, y, isHead) => {
         return {
-            head: true,
-            tail: false,
+            head: isHead,
+            tail: isHead,
             x: x,
             y: y
         }
@@ -322,44 +356,110 @@ module.exports.startListening = function (io) {
         var y = Math.floor(Math.random()*50)+1
         return {x, y}
     }
-    var moveSnake = (snake, dir) => {
-        console.log(' \n---- IN MOVE SNAKE. STARTING SNAKE ---------\n')
+    /**
+     * @param : current snake array
+     * @param : direction of user input
+     * @param : last direction of the snake
+     * @return : the new snake location or -1 if the move is invalid
+     *  */ 
+    var moveSnake = (snake, dir, lastDir) => {
+        // console.log(' \n---- IN MOVE SNAKE. STARTING SNAKE ---------\n')
         // console.log("DIRECTION: "+dir)
-        console.log(snake)
+        // console.log("LAST DIRECTION: "+lastDir)
+        // console.log(snake)
         switch (dir) {
             case 'UP':
-                // console.log('\nIN UP\n');
-                // console.log(snake);
-                // console.log(createSnakeHead(snake[0].x - 1, snake[0].y));
-                // console.log('Before Unshift');
-                // Unshift is doing weird stuff
-                console.log('UP')
-                snake.unshift(createSnakeHead(snake[0].x, snake[0].y - 1));
+                if (lastDir !== "DOWN"){
+                    snake.unshift(createSnakeElem(snake[0].x, snake[0].y - 1,true));
+                } else {
+                    snake = -1
+                }
                 break;
             case 'DOWN':
-                console.log('DOWN')
-                snake.unshift(createSnakeHead(snake[0].x, snake[0].y + 1));
-                // console.log(snake);
+                // console.log('DOWN')
+                if (lastDir !== "UP"){
+                    snake.unshift(createSnakeElem(snake[0].x, snake[0].y + 1,true));
+                } else {
+                    snake = -1
+                }
                 break;
             case 'LEFT':
-                console.log('LEFT')
-                snake.unshift(createSnakeHead(snake[0].x - 1, snake[0].y));
-                // console.log(snake);
+                // console.log('LEFT')
+                if (lastDir !== "RIGHT"){
+                    snake.unshift(createSnakeElem(snake[0].x - 1, snake[0].y,true));
+                } else {
+                    snake = -1
+                }
                 break;
             case 'RIGHT':
-                console.log('RIGHT')
-                snake.unshift(createSnakeHead(snake[0].x + 1, snake[0].y));
-                // console.log(snake);
+                if (lastDir !== "LEFT"){
+                    snake.unshift(createSnakeElem(snake[0].x + 1, snake[0].y,true));
+                } else {
+                    snake = -1
+                }
                 break;
             default:
                 // console.log('do nothing')
                 break;
-
-        
         }
-        console.log(snake)
-        console.log('\n-------END SNAKE---------\n')
-        return snake.splice(0,snake.length)
+        if (snake.length > 1) {
+            return snake.slice(0,-1)
+        } else {
+            return snake
+        }
+    }
+
+    var checkIfFoodEaten = (snakeArray, foodLocation) => {
+        if (snakeArray[0].x === foodLocation.x && snakeArray[0].y === foodLocation.y) {
+            console.log("RETURNING TRUE")
+            return true
+        } else {
+            console.log("RETURNING FALSE")
+            return false
+        }   
+    }
+    
+    var checkGameOver = (game) => {
+        if (game) {
+            var isOutOfBounds = checkSnakeBounds(game)
+            var didSnakeCollide = checkSnakeCollison(game)
+            if (isOutOfBounds === true  || didSnakeCollide === true){
+                return true
+            } else {
+                return false
+            }
+        }
+    }
+    var checkSnakeBounds = (game) => {
+        if (game.snakeArray[0].x < 1 ||
+            game.snakeArray[0].x > game.gameBounds.width ||
+            game.snakeArray[0].y < 1 ||
+            game.snakeArray[0].y > game.gameBounds.height) {
+            return true
+        }
+        return false
+    }
+
+    var checkSnakeCollison = (game) => {
+        console.log("\nIN SNAKE COLLISION")
+        console.log(game.snakeArray)
+        // check the head against all other elements in the array 
+        var snakeHead = game.snakeArray[0]
+
+        var collision  = game.snakeArray.slice(2,game.snakeArray.length)
+            .filter(elem => (elem.x === snakeHead.x))
+            .filter(elem => (elem.y === snakeHead.y))
+        console.log(collision)
+        if (collision.length) {
+            return true
+        } else {
+            return false
+        }
+    }
+    var extendSnake = (snakeArray) => {
+        var currentSnakeEnd = snakeArray[snakeArray.length-1]
+        snakeArray.push(createSnakeElem(currentSnakeEnd.x,currentSnakeEnd.y,false))
+        return snakeArray
     }
     // every 5 minutes, remove the expired requests
     setInterval(removeExpiredRequests, 300000)

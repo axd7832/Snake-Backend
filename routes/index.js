@@ -19,16 +19,12 @@ const compareHash = require('../utils/CompareHash')
 const protectRoute = require('../utils/ProtectRoute')
 
 routes.post('/api/register', (req, res) => {
-  //TOOO write sanitation and validations for username and password
   var username = req.body.username;
   var passwordToHash = req.body.password;
 
   //strip HTML tags
   username = striptags(username)
   password = striptags(passwordToHash)
-
-
-  console.log(`${username} ${passwordToHash}`)
   Hash(passwordToHash).then(hashedPass => {
       var userAccount = new User({
         username: username,

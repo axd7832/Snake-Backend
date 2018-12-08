@@ -14,9 +14,11 @@ var GameSchema = new Schema({
   playerTwoReady: Boolean,
   gameStatus: String,
   snakeArray: Array,
+  gameBounds: Object,
   foodLocation: Object,
   score: Number,
-  lastMoveTime: { type : Date, default: Date.now }
+  lastMoveTime: { type : Date, default: Date.now },
+  lastMoveDirection: {type: String, default: ''}
 }, {timestamps:true})
 
 module.exports = mongoose.model('Game',GameSchema, "Games")

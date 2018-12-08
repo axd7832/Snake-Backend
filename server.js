@@ -20,7 +20,6 @@ const mongoSanitize = require('express-mongo-sanitize');
 // Mongo Connection
 const mongoose = require("mongoose")
 const mongoDB = process.env.MONGO_URI
-const mongooseValidationErrorTransform = require('mongoose-validation-error-transform');
 mongoose.connect(mongoDB, { 
   useNewUrlParser: true,
   useCreateIndex: true,
