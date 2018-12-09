@@ -1,19 +1,27 @@
 const jwt = require('jsonwebtoken')
 const moment = require('moment')
-var striptags = require('striptags') // https://www.npmjs.com/package/striptags
 // WebSocket Security by Heroku : https://devcenter.heroku.com/articles/websocket-security
 
+// Mongoose Schemas
 const Game = require('../models/Game')
 const MessageDoc = require('../models/Message')
+
+// Exported Logic
+require('../game/gameHelpers')
+require('../game/gameLogic')
+require('../game/socketHelpers')
+require('../game/snakeLogic')
 
 const LOBBY_ROOM = 'Room 0'
 var connectedUsers = []
 var activeLobbies = {}
 
 module.exports.startListening = function (io) {   
-    //Authentication Middleware
+    //Authentication Middleware - Runs before anything else
     io.use((socket, next) => {
         if (socket.handshake.query && socket.handshake.query.token){
+            // Authorization of a a valid JWT
+            // JWT must be signed with Server's Secret Key
             jwt.verify(socket.handshake.query.token, process.env.TOKEN_SECRET, (err, decoded) => {
                 if(err) return next(new Error('Authentication error'))
                 socket.decoded = decoded
@@ -25,7 +33,9 @@ module.exports.startListening = function (io) {
         }    
     })
 
-    // When a user connects to the socket
+    /**
+     * The main WebSocket function
+     */
     io.on('connection', (socket) => {
         socket.join(LOBBY_ROOM)
         // alert UI about room change
@@ -34,13 +44,13 @@ module.exports.startListening = function (io) {
         var indexOfUser = connectedUsers.findIndex( user => user.username == socket.username)
         if ( indexOfUser === -1) {
           connectedUsers.push({username:socket.username, socket: socket})
-          io.emit("currentOnlinePlayers", getActivePlayerUsernames())
+          io.emit("currentOnlinePlayers", getActivePlayerUsernames(socket.username))
         } else {
-          // TODO: emit something to log the user out.
           console.log('User Already Logged In')
         }
 
         // when a socket disconnects
+        // emit the current players when someone joins or leaves 
         socket.on('disconnect', () => {
             if (socket.username) {
               var userIndex = connectedUsers.findIndex(user => user.username == socket.username)
@@ -52,7 +62,7 @@ module.exports.startListening = function (io) {
         // event for a user creating a lobby
         socket.on('CREATE_LOBBY', () => {
             // add player to a new room.
-            var roomId = generateRoomId()
+            var roomId = generateRoomId(activeLobbies)
             // leave the current room, join the inviters room
             joinRoom(socket,roomId)
             var lobby = {
@@ -94,9 +104,9 @@ module.exports.startListening = function (io) {
         socket.on('inviteResponse', (response) => {
             if (response) {
                 if(response.answer && response.inviteeUsername && response.answer === true) {
-                    var roomId = generateRoomId()
+                    var roomId = generateRoomId(activeLobbies)
                     var inviteeSocket = findOneUserSocketByUsername(response.inviteeUsername)
-                    var inviteeCurrentRoom = inviteeSocket.currentRoom
+                    // send the players to a new room
                     joinRoom(socket,roomId)
                     joinRoom(inviteeSocket,roomId)
 
@@ -121,28 +131,97 @@ module.exports.startListening = function (io) {
                 }
             }
         })
+        /**
+         * After a game has been played, option to play again
+         * Moves the users to a new room with a new game
+         * TODO: Change the unique id of a game from the roomId
+         */
+        socket.on('PLAY_AGAIN', (roomId) => {
+            if (roomId) {
+                Game.findOne({gameId:roomId},(err, game) => {
+                    if (err || game === null) console.log('Could Not Update')
+                    else {
+                        var roomId = generateRoomId(activeLobbies)
+                        var inviteeSocket = findOneUserSocketByUsername(game.playerTwoUsername)
+                        var hostSocket = findOneUserSocketByUsername(game.hostUsername)
+                        // send the users to the new room
+                        joinRoom(hostSocket,roomId)
+                        joinRoom(inviteeSocket,roomId)
+                        if (hostSocket && inviteeSocket) {
+                            var newGame = new Game({
+                                gameId: roomId,
+                                hostUsername: inviteeSocket.username,
+                                playerTwoUsername: hostSocket.username,
+                                gameBounds: {width: 50, height: 50},
+                                gameStatus: 'Awaiting Ready Up',
+                                score: 0,
+                                foodLocation: getFoodLocation(),
+                                snakeArray: initSnake()
+                            })
+                            newGame.save( (err) => {
+                                if(err) {
+                                console.log(err)
+                                } else{
+                                    sendGameData(newGame.gameId,newGame)
+                                }
+                            })  
+                        }
+                    }
+                })    
+            }
+        })
         
-        // returns the active players to ONE Socket
+        /** 
+         * returns the active players to ONE Socket 
+         * */
         socket.on('getOnlinePlayers', () => {
-            socket.emit("currentOnlinePlayers", getActivePlayerUsernames())
+            socket.emit("currentOnlinePlayers", getActivePlayerUsernames(socket.username))
         })
 
-        socket.on('SEND_MESSAGE', (message) => {
-          if (validateMessage(message)) {
-            var currentRoom = getSocketCurrentRoom(socket)
-            // save the sanitized message to the DB here...
-            var Message = new MessageDoc ({
-                sentBy: message.username,
-                messageText: message.messageText,
-                roomId: getSocketCurrentRoom(socket)
+        /** 
+         * Returns the top 20 players with the highest scores (Top 10 Games) Descending
+        */
+        socket.on('getLeaderboards', () => {
+            Game.find({gameStatus:'Completed'})
+                .sort('-score')
+                .exec((err, results) => {
+                if (!err && results !== null){
+                    var leaderboards = []
+                    results.forEach((game, index) => {
+                        var p1 = {rank: index+1, username: game.hostUsername, score: game.score}
+                        var p2 = {rank: index+1, username: game.playerTwoUsername, score: game.score}
+                        leaderboards.push(p1)
+                        leaderboards.push(p2)
+                    })
+                    socket.emit("currentLeaderboards", leaderboards.splice(0,20))
+                }
             })
+        })
+
+        /**
+         * Processes the message for chat, sends to the users current room
+         */
+        socket.on('SEND_MESSAGE', (message) => {
+            // calls the message validation
+            if (validateMessage(message)) {
+                var currentRoom = getSocketCurrentRoom(socket)
+                // save the sanitized message to the DB here...
+                var Message = new MessageDoc ({
+                    sentBy: message.username,
+                    messageText: message.messageText,
+                    roomId: getSocketCurrentRoom(socket)
+                })
             Message.save()
             io.to(currentRoom).emit('message',sanitizedMessage(message))
           }
         })
 
-        // game logic 
+        /** 
+         * Called when users Ready Up for the game 
+         * When both players are Ready, the game is started and inputs are allowed
+        */
         socket.on('GAME_READY_UP', (roomId) => {
+            // Searches for a game where the user is either the host or player2
             let query = {
                 $and: [
                     {gameStatus: 'Awaiting Ready Up'},
@@ -204,43 +283,38 @@ module.exports.startListening = function (io) {
             })  
         })
 
+        /**
+         * Commands from the frontend (W,A,S,D)
+         * Ensures that the game is active and updates the game
+         */
         socket.on('GAME_COMMAND', (gameUpdate) => {
             var query = {
                 gameId: gameUpdate.roomId,
             }
-            //console.log(`IN GAME COMMAND ${socket.username}`)
             Game.findOneAndUpdate(query,{new: true}, (err, game) => {
                 if (err || game === null) {
                     console.log(`Could not retrieve game: ${query.gameId}`)
                 } else {
-                    //console.log(game)
                     if (game.gameStatus === 'Active') {
                         // check the time of the last move - 
                         var lastMove = moment(game.lastMoveTime)
-                        // console.log(lastMove)
                         var diff = moment().diff(lastMove)
                         // this is the 'tick' of the game...
                         if ( diff > 100){
                             // perform all the game operations here
                             game.snakeArray = moveSnake(game.snakeArray, gameUpdate.userInputDirection, game.lastMoveDirection)
-                            console.log("\nAFTER MOVEMENT\n")
-                            console.log(game.snakeArray)
                             if (game.snakeArray[0] !== -1) {
-                                console.log("\nVALID MOVE\n")
                                 game.lastMoveTime = moment().toISOString()
-                                game.lastMoveDirection = gameUpdate.userInputDirection
-                                // console.log("SETTING THE NEW SNAKE ARRAY")
-                                // console.log(game.snakeArray)
+                                // used to stop the snake from moving backwards
+                                game.lastMoveDirection = gameUpdate.userInputDirection 
                                 var wasFoodEaten = checkIfFoodEaten(game.snakeArray, game.foodLocation)
                                 if (wasFoodEaten === true) {
-                                    console.log("FOOD EATEN")
                                     game.snakeArray = extendSnake(game.snakeArray,gameUpdate.userInputDirection)
                                     game.foodLocation = getFoodLocation()
                                     game.score += 100
                                 }
                                 // check if game over
                                 var isGameOver = checkGameOver (game)
-                                console.log(`\nCHECK GAME OVER ${isGameOver}\n`)      
                                 if (isGameOver === true) game.gameStatus = "Completed"                   
                                 Game.findOneAndUpdate({gameId: game.gameId},game,{new:true},(err, updatedGame) => {
                                     if (err || updatedGame === null) {
@@ -256,7 +330,9 @@ module.exports.startListening = function (io) {
         })
     })
 
-    // join the new room
+    /** 
+     * Takes a socket and a new roomId and joins the room
+     * */
     var joinRoom = (socket, roomToJoin) => {
         if(socket && roomToJoin) {
             socket.leave(socket.currentRoom)
@@ -266,33 +342,6 @@ module.exports.startListening = function (io) {
         }
     }
 
-    // TODO - move helper functions to another file
-    var validateMessage = (message) => {
-        if(message) {
-          if (!message.username || message.username === '') return false
-          if (!message.messageText || message.messageText === '') return false
-        } else {
-            return false
-        }
-        return true
-    }
-
-    // strip tags to prevent XSS attacks
-    var sanitizedMessage = (message) => {
-        message.username = striptags(message.username)
-        message.messageText = striptags(message.messageText)
-        if (message.messageText === '') message.messageText = '-Message Removed-'
-        message.timestamp = moment().format('MM/D/YY hh:mm a')
-        return message
-    } 
-
-    // Create a roomId, adds one to the current active lobbies
-    var generateRoomId = () => {
-        let randomNum = Math.random().toString(36).slice(6)
-        var roomId = `Room ${Object.keys(activeLobbies).length+1}${randomNum}`
-        return roomId
-    }
-
     // helper to find the socket of a user by username
     var findOneUserSocketByUsername = (searchUsername) => {
         let foundUserSocketIndex = connectedUsers.findIndex(user => user.username === searchUsername)
@@ -300,32 +349,33 @@ module.exports.startListening = function (io) {
         else return null
     }
 
-    // sends an invite to toSocket from fromSocket...
-    var createNewInviteRequest = (fromSocket, toSocket) => {
-        if (fromSocket && toSocket) {
-            io.to(`${toSocket.id}`).emit('gameInvite', `${fromSocket.username}`)
-        }
-    }
-
-    // helper to get the currentRoom attached to a socket
-    var getSocketCurrentRoom = (socket) => {
-        return socket.currentRoom
-    }
-
-    // helper to return the active players by username
-    // TODO remove the current active socket from the returned array
-    var getActivePlayerUsernames = () => {
+    /**  
+     * helper to return the active players by username
+     * TODO remove the current active socket from the returned array */
+    var getActivePlayerUsernames = (username) => {
         var onlineUsers = connectedUsers.map(user => user.username)
-        // console.log(onlineUsers)
+        // if username is passed in, remove it from the onlineUsers 
+        if (username) {
+            onlineUsers = onlineUsers.filter(user => user !== username)
+        }
         return onlineUsers
     }
-    
+    // sends an invite to toSocket from fromSocket...
+    var createNewInviteRequest = (fromSocket, toSocket) => {
+      if (fromSocket && toSocket) {
+          io.to(`${toSocket.id}`).emit('gameInvite', `${fromSocket.username}`)
+      }
+    }
+
     // instead of setting a timeout on all requests send, this function will be called after a set amount of time
     // intended to prevent memory issues.
     var removeExpiredRequests = () => {
-        //console.log('cleanning requests...')
+        //console.log('cleaning requests...')
     }
 
+    /**
+     * Emits the updated game to the room (gameId)
+     */
     var sendGameData = (gameId, game) => {
         io.to(gameId).emit('GAME_UPDATE',{
             snakeArr: game.snakeArray,
@@ -334,133 +384,7 @@ module.exports.startListening = function (io) {
             score: game.score
         })
     }
-    var getFoodLocation = () => {
-        return getRandomLocation()
-    }
-    var initSnake = () => {
-        var randomLoc = getRandomLocation()
-        var snakeArr = []
-        snakeArr.push(createSnakeElem(randomLoc.x,randomLoc.y,true))
-        return snakeArr
-    }
-    var createSnakeElem = (x, y, isHead) => {
-        return {
-            head: isHead,
-            tail: isHead,
-            x: x,
-            y: y
-        }
-    } 
-    var getRandomLocation = () => {
-        var x = Math.floor(Math.random()*50)+1
-        var y = Math.floor(Math.random()*50)+1
-        return {x, y}
-    }
-    /**
-     * @param : current snake array
-     * @param : direction of user input
-     * @param : last direction of the snake
-     * @return : the new snake location or -1 if the move is invalid
-     *  */ 
-    var moveSnake = (snake, dir, lastDir) => {
-        // console.log(' \n---- IN MOVE SNAKE. STARTING SNAKE ---------\n')
-        // console.log("DIRECTION: "+dir)
-        // console.log("LAST DIRECTION: "+lastDir)
-        // console.log(snake)
-        switch (dir) {
-            case 'UP':
-                if (lastDir !== "DOWN"){
-                    snake.unshift(createSnakeElem(snake[0].x, snake[0].y - 1,true));
-                } else {
-                    snake = -1
-                }
-                break;
-            case 'DOWN':
-                // console.log('DOWN')
-                if (lastDir !== "UP"){
-                    snake.unshift(createSnakeElem(snake[0].x, snake[0].y + 1,true));
-                } else {
-                    snake = -1
-                }
-                break;
-            case 'LEFT':
-                // console.log('LEFT')
-                if (lastDir !== "RIGHT"){
-                    snake.unshift(createSnakeElem(snake[0].x - 1, snake[0].y,true));
-                } else {
-                    snake = -1
-                }
-                break;
-            case 'RIGHT':
-                if (lastDir !== "LEFT"){
-                    snake.unshift(createSnakeElem(snake[0].x + 1, snake[0].y,true));
-                } else {
-                    snake = -1
-                }
-                break;
-            default:
-                // console.log('do nothing')
-                break;
-        }
-        if (snake.length > 1) {
-            return snake.slice(0,-1)
-        } else {
-            return snake
-        }
-    }
-
-    var checkIfFoodEaten = (snakeArray, foodLocation) => {
-        if (snakeArray[0].x === foodLocation.x && snakeArray[0].y === foodLocation.y) {
-            console.log("RETURNING TRUE")
-            return true
-        } else {
-            console.log("RETURNING FALSE")
-            return false
-        }   
-    }
     
-    var checkGameOver = (game) => {
-        if (game) {
-            var isOutOfBounds = checkSnakeBounds(game)
-            var didSnakeCollide = checkSnakeCollison(game)
-            if (isOutOfBounds === true  || didSnakeCollide === true){
-                return true
-            } else {
-                return false
-            }
-        }
-    }
-    var checkSnakeBounds = (game) => {
-        if (game.snakeArray[0].x < 1 ||
-            game.snakeArray[0].x > game.gameBounds.width ||
-            game.snakeArray[0].y < 1 ||
-            game.snakeArray[0].y > game.gameBounds.height) {
-            return true
-        }
-        return false
-    }
-
-    var checkSnakeCollison = (game) => {
-        console.log("\nIN SNAKE COLLISION")
-        console.log(game.snakeArray)
-        // check the head against all other elements in the array 
-        var snakeHead = game.snakeArray[0]
-
-        var collision  = game.snakeArray.slice(2,game.snakeArray.length)
-            .filter(elem => (elem.x === snakeHead.x))
-            .filter(elem => (elem.y === snakeHead.y))
-        console.log(collision)
-        if (collision.length) {
-            return true
-        } else {
-            return false
-        }
-    }
-    var extendSnake = (snakeArray) => {
-        var currentSnakeEnd = snakeArray[snakeArray.length-1]
-        snakeArray.push(createSnakeElem(currentSnakeEnd.x,currentSnakeEnd.y,false))
-        return snakeArray
-    }
     // every 5 minutes, remove the expired requests
     setInterval(removeExpiredRequests, 300000)
 }
