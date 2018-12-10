@@ -370,9 +370,37 @@ module.exports.startListening = function (io) {
     // instead of setting a timeout on all requests send, this function will be called after a set amount of time
     // intended to prevent memory issues.
     var removeExpiredRequests = () => {
-        //console.log('cleaning requests...')
-    }
+        // remove all games that are older than 10 minutes old
+        // and are status: 'Created' or 'Awaiting Ready Up'
+        var query = {
+            $and: [
+                {
+                    updatedAt: {
+                        $lt: moment(new Date()).subtract(10, "minutes").toDate()
+                    }
+                },
+                {
+                    $or: [
+                        {
+                            gameStatus: 'Game Created'
+                        },
+                        {
+                            gameStatus: 'Awaiting Ready Up'
+                        }
+                    ]
+                }
+            ]  
+        }
 
+        Game.find(query, (err, games) => {
+            if (err || games === null){
+                console.log('Errr....')
+            } else {
+                console.log('Incomplete games deleted...')
+            }
+        })
+    }
+    
     /**
      * Emits the updated game to the room (gameId)
      */
@@ -385,6 +413,6 @@ module.exports.startListening = function (io) {
         })
     }
     
-    // every 5 minutes, remove the expired requests
+    // every 5 minutes, remove incomplete games
     setInterval(removeExpiredRequests, 300000)
 }
