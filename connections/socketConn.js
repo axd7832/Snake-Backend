@@ -45,6 +45,7 @@ module.exports.startListening = function (io) {
         if ( indexOfUser === -1) {
           connectedUsers.push({username:socket.username, socket: socket})
           io.emit("currentOnlinePlayers", getActivePlayerUsernames(socket.username))
+
         } else {
           console.log('User Already Logged In')
         }
@@ -56,7 +57,9 @@ module.exports.startListening = function (io) {
               var userIndex = connectedUsers.findIndex(user => user.username == socket.username)
               connectedUsers.splice(userIndex,userIndex+1)
             }
+            let currentRoom = getSocketCurrentRoom(socket)
             io.emit("currentOnlinePlayers", getActivePlayerUsernames())
+            io.to(currentRoom).emit('message',createMessageFromServer(`${socket.username} has disconnected from ${currentRoom}`))
         })
 
         // event for a user creating a lobby
@@ -94,6 +97,8 @@ module.exports.startListening = function (io) {
             if(foundUserSocket) {
                 // create an invite. 
                 createNewInviteRequest(socket,foundUserSocket)
+                socket.emit('message',createMessageFromServer(`Invite sent to ${inviteeUsername}`))
+
             } else {
                 console.log('No User Found')
             }
@@ -103,6 +108,7 @@ module.exports.startListening = function (io) {
         // the response object here must contain the inviting username
         socket.on('inviteResponse', (response) => {
             if (response) {
+                console.log(response)
                 if(response.answer && response.inviteeUsername && response.answer === true) {
                     var roomId = generateRoomId(activeLobbies)
                     var inviteeSocket = findOneUserSocketByUsername(response.inviteeUsername)
@@ -128,6 +134,12 @@ module.exports.startListening = function (io) {
                           sendGameData(newGame.gameId,newGame)
                         }
                     })  
+                } else {
+                    console.log(response.inviteeUsername)
+                    console.log(findOneUserSocketByUsername(response.inviteeUsername))
+                    let socketId = findOneUserSocketByUsername(response.inviteeUsername).id
+                    console.log(socketId)
+                    io.to(socketId).emit('message',createMessageFromServer(`${response.inviteeUsername} has declined your request`))
                 }
             }
         })
@@ -266,6 +278,9 @@ module.exports.startListening = function (io) {
                     if (err) {
                         console.log(`Could Not Ready Up: ${socket.username}`)
                     }
+                    // Tell the player that they are readied up                  
+                    socket.emit('message',createMessageFromServer(`You have readied up.`))
+
                     // check if both of the players are ready
                     if (model.hostReady === true && model.playerTwoReady === true) {
                         var gameStartObj = {
@@ -276,6 +291,8 @@ module.exports.startListening = function (io) {
                             if (err || game === null) {
                                 console.log('Could Not Update Game Status to Active')
                             }
+                            let currentRoom = getSocketCurrentRoom(socket)
+                            io.to(currentRoom).emit('message',createMessageFromServer(`The game has started. Take control of the snake with WASD.`))
                             sendGameData(roomId, game)
                         })
                     }

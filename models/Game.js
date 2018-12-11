@@ -1,6 +1,6 @@
 const mongoose = require("mongoose")
 const Schema = mongoose.Schema
-
+// Mongoose Schema for a Game
 var GameSchema = new Schema({
   hostUsername: {
     type: String,

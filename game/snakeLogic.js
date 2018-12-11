@@ -1,3 +1,7 @@
+/**
+ * Initalizer for the snake array
+ * @return snakeArr Snake with 1 element in it
+ */
 initSnake = () => {
   var randomLoc = getRandomLocation()
   var snakeArr = []
@@ -5,6 +9,13 @@ initSnake = () => {
   return snakeArr
 }
 
+/**
+ * Creates the object to be added to the snake
+ * @param x coord
+ * @param y coord
+ * @param isHead should make the node a head node
+ * @return isGameOver 
+ */
 createSnakeElem = (x, y, isHead) => {
   return {
       head: isHead,
@@ -22,10 +33,6 @@ createSnakeElem = (x, y, isHead) => {
 * @return : the new snake location or -1 if the move is invalid
 *  */ 
 moveSnake = (snake, dir, lastDir) => {
-  // console.log(' \n---- IN MOVE SNAKE. STARTING SNAKE ---------\n')
-  // console.log("DIRECTION: "+dir)
-  // console.log("LAST DIRECTION: "+lastDir)
-  // console.log(snake)
   switch (dir) {
       case 'UP':
           if (lastDir !== "DOWN"){
@@ -35,7 +42,6 @@ moveSnake = (snake, dir, lastDir) => {
           }
           break;
       case 'DOWN':
-          // console.log('DOWN')
           if (lastDir !== "UP"){
               snake.unshift(createSnakeElem(snake[0].x, snake[0].y + 1,true));
           } else {
@@ -43,7 +49,6 @@ moveSnake = (snake, dir, lastDir) => {
           }
           break;
       case 'LEFT':
-          // console.log('LEFT')
           if (lastDir !== "RIGHT"){
               snake.unshift(createSnakeElem(snake[0].x - 1, snake[0].y,true));
           } else {
@@ -68,11 +73,18 @@ moveSnake = (snake, dir, lastDir) => {
   }
 }
 
+/**
+ * extends the snake by one
+ * @param game Object
+ * @return isGameOver 
+ */
 extendSnake = (snakeArray) => {
   var currentSnakeEnd = snakeArray[snakeArray.length-1]
   snakeArray.push(createSnakeElem(currentSnakeEnd.x,currentSnakeEnd.y,false))
   return snakeArray
 }
+
+//export the functions
 module.exports = {
   initSnake,
   createSnakeElem,

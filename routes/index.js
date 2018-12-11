@@ -1,21 +1,17 @@
-//login
-const passport = require('passport')
-const passport_jwt = require('passport-jwt')
 //jwt auth
-const jwt_strategy = passport_jwt.Strategy
-const extract_jwt = passport_jwt.ExtractJWT
 const jwt = require('jsonwebtoken')
 const routes = require('express').Router()
 const bcrypt = require('bcrypt')
 // Validation | Sanitization
 var striptags = require('striptags') // https://www.npmjs.com/package/striptags
 
-//Mongoose Schemas
+// Mongoose Schemas
 const User = require('../models/User')
-//hash passoword 
+// hash passoword 
 const Hash = require('../utils/Hash')
-const compareHash = require('../utils/CompareHash')
-//route protecter
+// route protecter
+// not currently used - used WS for most requests that could be get/post
+// leaving in incase future routes need to be protected.
 const protectRoute = require('../utils/ProtectRoute')
 
 routes.post('/api/register', (req, res) => {
@@ -25,16 +21,17 @@ routes.post('/api/register', (req, res) => {
   //strip HTML tags
   username = striptags(username)
   password = striptags(passwordToHash)
+  // Hash the password
   Hash(passwordToHash).then(hashedPass => {
       var userAccount = new User({
         username: username,
         role: 'player',
         hash: hashedPass
       })
+      // Send a response to the user
       userAccount.save( (err) => {
         if(err) {
           res.status(400).json({message: "Username taken."})
-          console.log(err)
         } else{
           res.status(200).json({message: 'Account Created'})
         }
@@ -45,25 +42,25 @@ routes.post('/api/register', (req, res) => {
 })
 
 routes.post("/api/login", (req,res) => {
-  console.log(req.body)
   //validate user input 
   var username = req.body.username
   var password = req.body.password
   // Strip Tags
-
   username = striptags(username)
   password = striptags(password)
 
-
+  // Find a user and then check the passwork with bcrypt
   var queryPromise = User.findOne({username: username}).exec()
   queryPromise.then((foundUser) => {
     var user = {
       username: foundUser.username, 
       role: foundUser.role
     }
+    // Uses bcrypt to compare the string hash to the foundUser hash
     bcrypt.compare(password, foundUser.hash, (err, isMatch) => {
       if (err) res.status(400).json({message: 'Invalid Credentials'}) 
       else if (isMatch) {
+        // if its a match, then sign the token with the token secret
         user.token = jwt.sign({user}, process.env.TOKEN_SECRET)
         res.status(200).json({user})
       }
