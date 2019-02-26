@@ -17,6 +17,7 @@ const mongoSanitize = require('express-mongo-sanitize') // https://www.npmjs.com
 // Mongo Connection
 const mongoose = require("mongoose")
 const mongoDB = process.env.MONGO_URI
+// Connect to the database
 mongoose.connect(mongoDB, { 
   useNewUrlParser: true,
   useCreateIndex: true,
